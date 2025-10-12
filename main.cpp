@@ -7,8 +7,8 @@
  *  Copyright (c) 2014 - 2020 Shanghai Slamtec Co., Ltd.
  *  http://www.slamtec.com
  *
- */
-/*
+ * Pulled from https://github.com/Slamtec/rplidar_sdk
+ *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
@@ -28,6 +28,11 @@
 #include <stdlib.h>
 #include <signal.h>
 #include <string.h>
+#include <limits>
+#include <cmath>
+
+#define DISTANCE_COUNT (360*10)
+#define MAX_CALIBRATION_SCANS 100
 
 #include "sl_lidar.h" 
 #include "sl_lidar_driver.h"
@@ -52,17 +57,7 @@ static inline void delay(sl_word_size_t ms){
 
 using namespace sl;
 
-void print_usage(int argc, const char * argv[])
-{
-    printf("Usage:\n"
-           " For serial channel\n %s --channel --serial <com port> [baudrate]\n"
-           " The baudrate used by different models is as follows:\n"
-           "  A1(115200),A2M7(256000),A2M8(115200),A2M12(256000),"
-           "A3(256000),S1(256000),S2(1000000),S3(1000000)\n"
-		   " For udp channel\n %s --channel --udp <ipaddr> [port NO.]\n"
-           " The T1 default ipaddr is 192.168.11.2,and the port NO.is 8089. Please refer to the datasheet for details.\n"
-           , argv[0], argv[0]);
-}
+
 
 bool checkSLAMTECLIDARHealth(ILidarDriver * drv)
 {
@@ -93,12 +88,128 @@ void ctrlc(int)
     ctrl_c_pressed = true;
 }
 
+void print_usage()
+{
+       printf("\n\nUsage: -s <filename> to save calibration file\n");
+        printf("       -l <filename> to load calibration file\n");
+}
+
+void run_mode(FILE * file, ILidarDriver * drv)
+{
+    sl_result    op_result;
+
+    while (!ctrl_c_pressed) 
+    {
+        sl_lidar_response_measurement_node_hq_t nodes[8192];
+        size_t   count = _countof(nodes);
+
+        op_result = drv->grabScanDataHq(nodes, count);
+
+        if (SL_IS_OK(op_result)) 
+        {
+            drv->ascendScanData(nodes, count);
+            for (int pos = 0; pos < (int)count ; ++pos) 
+            {
+                float angle = (nodes[pos].angle_z_q14 * 90.f) / 16384.f;
+                float dist = nodes[pos].dist_mm_q2/4.0f;
+                int quality = nodes[pos].quality >> SL_LIDAR_RESP_MEASUREMENT_QUALITY_SHIFT;
+                printf("%s theta: %03.2f Dist: %08.2f Q: %d\n", 
+                    (nodes[pos].flag & SL_LIDAR_RESP_HQ_FLAG_SYNCBIT) ?"S ":"  ", 
+                    angle, dist, quality);
+                if (quality >0) 
+                {
+                    int inter_angle = (int)round(angle * 10.0f);
+                    if (inter_angle < 0) inter_angle = 0;
+                    if (inter_angle >= DISTANCE_COUNT) inter_angle = DISTANCE_COUNT - 1;
+                }
+            }
+        }
+    }
+}
+
+void calibrate_mode(FILE * file, ILidarDriver * drv)
+{
+    sl_result    op_result;
+    int          distances[DISTANCE_COUNT] = {0};
+    std::fill(distances, distances + DISTANCE_COUNT, std::numeric_limits<int>::max());
+    int          flags[DISTANCE_COUNT] = {0};
+    int          angle_count = 0;
+    int          scan_count = 0;
+
+    // Calibration mode implementation
+    // fetech result and print it out...
+    while (!ctrl_c_pressed) 
+    {
+        sl_lidar_response_measurement_node_hq_t nodes[8192];
+        size_t   count = _countof(nodes);
+
+        op_result = drv->grabScanDataHq(nodes, count);
+
+        if (SL_IS_OK(op_result)) 
+        {
+            drv->ascendScanData(nodes, count);
+            for (int pos = 0; pos < (int)count ; ++pos) 
+            {
+                float angle = (nodes[pos].angle_z_q14 * 90.f) / 16384.f;
+                float dist = nodes[pos].dist_mm_q2/4.0f;
+                int quality = nodes[pos].quality >> SL_LIDAR_RESP_MEASUREMENT_QUALITY_SHIFT;
+                printf("%s theta: %03.2f Dist: %08.2f Q: %d Count: %d\n", 
+                    (nodes[pos].flag & SL_LIDAR_RESP_HQ_FLAG_SYNCBIT) ?"S ":"  ", 
+                    angle, dist, quality, angle_count);
+                if (quality >0) 
+                {
+                    int inter_angle = (int)round(angle * 10.0f);
+                    if (inter_angle < 0) inter_angle = 0;
+                    if (inter_angle >= DISTANCE_COUNT) inter_angle = DISTANCE_COUNT - 1;
+                    if (dist < distances[inter_angle]) 
+                    {
+                        distances[inter_angle] = (int)dist;
+                        if(!flags[inter_angle]) 
+                        {
+                            flags[inter_angle] = 1;
+                            angle_count++;
+                            if(angle_count == DISTANCE_COUNT) {
+                                printf("All angles have been calibrated\n");
+                                ctrl_c_pressed = true;
+                                break;
+                            }
+                        }
+                    }
+                }   
+            }
+        }
+
+        if(scan_count++ > MAX_CALIBRATION_SCANS) 
+        {
+            printf("Maximum calibration scans reached\n");
+            break;
+        }
+
+        if (ctrl_c_pressed){ 
+            break;
+        }
+    }
+
+    if (file) 
+    {
+        // save calibration data to file
+        for (int pos = 0; pos < DISTANCE_COUNT; ++pos) 
+        {
+            fprintf(file, "%d %d\n", pos, distances[pos]);
+        }
+        fclose(file);
+        file = NULL;
+        printf("Calibration data saved\n");
+    }
+}   
+
 int main(int argc, const char * argv[]) 
 {
     const char * comm_port = NULL;
+    FILE       * file = NULL;
     sl_u32       baudrateArray[2] = {115200, 256000};
-    sl_result    op_result;
     IChannel*    _channel;
+    int          save_flag = 0;
 
     printf("Ultra simple LIDAR data grabber for SLAMTEC LIDAR.\n"
            "Version: %s\n", SL_LIDAR_SDK_VERSION);
@@ -112,7 +223,47 @@ int main(int argc, const char * argv[])
 		comm_port = "/dev/ttyUSB0";
 #endif	 
 
+    printf("\nUsing default serial port %s\n", comm_port);
 
+    if (argc == 3) 
+    {
+        if (strcmp(argv[1], "-s") == 0) 
+        {
+            // create file argv[2] to save calibration data
+            const char * calibration_filename = argv[2];
+            printf("Save calibration data to %s\n", calibration_filename);
+            // open file for writing
+            file = fopen(calibration_filename, "w");
+            if (!file) {
+                fprintf(stderr, "Error opening file for writing: %s\n", calibration_filename);
+                return -1;
+            }
+
+            save_flag = 1;
+        }
+        else if (strcmp(argv[1], "-l") == 0) 
+        {
+            // load calibration data from file argv[2]
+            const char * calibration_filename = argv[2];
+            printf("Load calibration data from %s\n", calibration_filename);
+            // open file for reading
+            file = fopen(calibration_filename, "r");
+            if (!file) {
+                fprintf(stderr, "Error opening file for reading: %s\n", calibration_filename);
+                return -1;
+            }
+        }
+        else
+        {
+            print_usage();
+            return -1;
+        }
+    }
+    else
+    {
+        print_usage();
+        return -1;
+    }
 
     // create the driver instance
 	ILidarDriver * drv = *createLidarDriver();
@@ -131,7 +282,7 @@ int main(int argc, const char * argv[])
 		_channel = (*createSerialPortChannel(comm_port, baudrateArray[i]));
         if (SL_IS_OK((drv)->connect(_channel))) 
         {
-            op_result = drv->getDeviceInfo(devinfo);
+            sl_result op_result = drv->getDeviceInfo(devinfo);
             if (SL_IS_OK(op_result)) 
             {
 	            connectSuccess = true;
@@ -176,35 +327,30 @@ int main(int argc, const char * argv[])
     // start scan...
     drv->startScan(0,1);
 
-    // fetech result and print it out...
-    while (1) {
-        sl_lidar_response_measurement_node_hq_t nodes[8192];
-        size_t   count = _countof(nodes);
 
-        op_result = drv->grabScanDataHq(nodes, count);
-
-        if (SL_IS_OK(op_result)) {
-            drv->ascendScanData(nodes, count);
-            for (int pos = 0; pos < (int)count ; ++pos) {
-                printf("%s theta: %03.2f Dist: %08.2f Q: %d \n", 
-                    (nodes[pos].flag & SL_LIDAR_RESP_HQ_FLAG_SYNCBIT) ?"S ":"  ", 
-                    (nodes[pos].angle_z_q14 * 90.f) / 16384.f,
-                    nodes[pos].dist_mm_q2/4.0f,
-                    nodes[pos].quality >> SL_LIDAR_RESP_MEASUREMENT_QUALITY_SHIFT);
-            }
+    if (file)
+    {
+        if(!save_flag) 
+        {
+            run_mode(file, drv);
         }
-
-        if (ctrl_c_pressed){ 
-            break;
+        else 
+        {
+            calibrate_mode(file, drv);
         }
     }
+    else 
+    {
+        printf("\n\nNo file specified\n\n");
+    }
 
-    drv->stop();
-	delay(200);
-    drv->setMotorSpeed(0);
+
     // done!
 on_finished:
     if(drv) {
+        drv->stop();
+	    delay(200);
+        drv->setMotorSpeed(0);
         delete drv;
         drv = NULL;
     }
