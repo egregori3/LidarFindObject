@@ -33,6 +33,8 @@
 
 #define DISTANCE_COUNT (360*10)
 #define MAX_CALIBRATION_SCANS 100
+#define NOISE_BUFFER_SIZE 100
+#define MAX_DISTANCE 10000
 
 #include "sl_lidar.h" 
 #include "sl_lidar_driver.h"
@@ -97,6 +99,25 @@ void print_usage()
 void run_mode(FILE * file, ILidarDriver * drv)
 {
     sl_result    op_result;
+    int          distances[DISTANCE_COUNT] = {0};
+    std::fill(distances, distances + DISTANCE_COUNT, std::numeric_limits<int>::max());
+
+    // load calibration data from file
+    if (file) 
+    {
+        int angle;
+        int distance;
+        while (fscanf(file, "%d %d\n", &angle, &distance) == 2) 
+        {
+            if (angle >= 0 && angle < DISTANCE_COUNT) 
+            {
+                if(distance > NOISE_BUFFER_SIZE)
+                    distances[angle] = distance - NOISE_BUFFER_SIZE;
+                else
+                    distances[angle] = 0;
+            }
+        }
+    }
 
     while (!ctrl_c_pressed) 
     {
@@ -113,14 +134,15 @@ void run_mode(FILE * file, ILidarDriver * drv)
                 float angle = (nodes[pos].angle_z_q14 * 90.f) / 16384.f;
                 float dist = nodes[pos].dist_mm_q2/4.0f;
                 int quality = nodes[pos].quality >> SL_LIDAR_RESP_MEASUREMENT_QUALITY_SHIFT;
-                printf("%s theta: %03.2f Dist: %08.2f Q: %d\n", 
-                    (nodes[pos].flag & SL_LIDAR_RESP_HQ_FLAG_SYNCBIT) ?"S ":"  ", 
-                    angle, dist, quality);
-                if (quality >0) 
+                if (quality > 0 && dist > 0) 
                 {
                     int inter_angle = (int)round(angle * 10.0f);
-                    if (inter_angle < 0) inter_angle = 0;
-                    if (inter_angle >= DISTANCE_COUNT) inter_angle = DISTANCE_COUNT - 1;
+                    if (inter_angle >= 0 && inter_angle < DISTANCE_COUNT )
+                    {
+                        int calib_dist = distances[inter_angle];
+                        if(abs((int)dist - calib_dist) > NOISE_BUFFER_SIZE)
+                            printf("Angle: %03.2f Dist: %08.2f\n", angle, dist);
+                    }
                 }
             }
         }
