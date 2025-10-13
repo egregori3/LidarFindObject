@@ -33,7 +33,7 @@
 
 #define DISTANCE_COUNT (360*10)
 #define MAX_CALIBRATION_SCANS 100
-#define NOISE_BUFFER_SIZE 100
+#define NOISE_BUFFER_SIZE 300
 #define MAX_DISTANCE 10000
 
 #include "sl_lidar.h" 
@@ -100,8 +100,7 @@ void run_mode(FILE * file, ILidarDriver * drv)
 {
     sl_result    op_result;
     int          distances[DISTANCE_COUNT] = {0};
-    std::fill(distances, distances + DISTANCE_COUNT, std::numeric_limits<int>::max());
-
+ 
     // load calibration data from file
     if (file) 
     {
@@ -111,7 +110,7 @@ void run_mode(FILE * file, ILidarDriver * drv)
         {
             if (angle >= 0 && angle < DISTANCE_COUNT) 
             {
-                if(distance > NOISE_BUFFER_SIZE)
+                if((distance > NOISE_BUFFER_SIZE) && (distance < MAX_DISTANCE))
                     distances[angle] = distance - NOISE_BUFFER_SIZE;
                 else
                     distances[angle] = 0;
@@ -140,8 +139,8 @@ void run_mode(FILE * file, ILidarDriver * drv)
                     if (inter_angle >= 0 && inter_angle < DISTANCE_COUNT )
                     {
                         int calib_dist = distances[inter_angle];
-                        if(abs((int)dist - calib_dist) > NOISE_BUFFER_SIZE)
-                            printf("Angle: %03.2f Dist: %08.2f\n", angle, dist);
+                        if(dist < calib_dist)
+                            printf("Angle: %03.2f Dist: %08.2f calib_dist: %d\n", angle, dist, calib_dist);
                     }
                 }
             }
@@ -233,8 +232,8 @@ int main(int argc, const char * argv[])
     IChannel*    _channel;
     int          save_flag = 0;
 
-    printf("Ultra simple LIDAR data grabber for SLAMTEC LIDAR.\n"
-           "Version: %s\n", SL_LIDAR_SDK_VERSION);
+    printf("Find Object Using LIDAR\nSDK Version: %s\n", SL_LIDAR_SDK_VERSION);
+    printf("Compiled: %s %s\n", __DATE__, __TIME__);
 
 #ifdef _WIN32
 		// use default com port
