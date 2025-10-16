@@ -35,6 +35,10 @@
 #define MAX_CALIBRATION_SCANS 100
 #define NOISE_BUFFER_SIZE 300
 #define MAX_DISTANCE 10000
+#define OUTPUT_POLAR 0
+#define OUTPUT_CARTESIAN 1
+#define OUTPUT_FILTERED 2
+
 
 #include "sl_lidar.h" 
 #include "sl_lidar_driver.h"
@@ -90,13 +94,81 @@ void ctrlc(int)
     ctrl_c_pressed = true;
 }
 
-void print_usage()
+// Structure to hold Cartesian coordinates
+struct CartesianPoint {
+    float x;
+    float y;
+};
+
+// Convert polar coordinates to Cartesian coordinates
+// angle: angle in degrees (0-360)
+// distance: distance in mm
+// returns: CartesianPoint with x, y coordinates in mm
+CartesianPoint polar_to_cartesian(float angle_degrees, float distance_mm)
 {
-       printf("\n\nUsage: -s <filename> to save calibration file\n");
-        printf("       -l <filename> to load calibration file\n");
+    CartesianPoint point;
+    
+    // Convert degrees to radians
+    float angle_radians = angle_degrees * M_PI / 180.0f;
+    
+    // Standard polar to Cartesian conversion
+    // x = r * cos(θ), y = r * sin(θ)
+    point.x = distance_mm * cos(angle_radians);
+    point.y = distance_mm * sin(angle_radians);
+    
+    return point;
 }
 
-void run_mode(FILE * file, ILidarDriver * drv)
+// Overloaded version that takes angle in degrees*10 format (as used in your arrays)
+CartesianPoint polar_to_cartesian_scaled(int angle_scaled, float distance_mm)
+{
+    // Convert scaled angle (degrees * 10) back to degrees
+    float angle_degrees = angle_scaled / 10.0f;
+    return polar_to_cartesian(angle_degrees, distance_mm);
+}
+
+// Filter output algorithm
+// returns true if x and y are output
+// new scan indicates start of new scan
+bool filter_algorithm(bool new_scan, float *x, float *y)
+{
+    static float average_x = 0.0f;
+    static float average_y = 0.0f;
+    static int count = 0;
+
+    // Pablos's average X and Y algorithm
+    if(new_scan) // Start of scan
+    {
+        if(count > 0)
+        {
+            *x = average_x / count;
+            *y = average_y / count;
+            average_x = 0.0f;
+            average_y = 0.0f;
+            count = 0;
+            return true;
+        }
+        else
+        {
+            // No valid points collected in the last scan
+            *x = 0.0f;
+            *y = 0.0f;
+            return false;
+        }
+    }
+    else // During scan, accumulate points
+    {
+        if(x && y)
+        {
+            average_x += *x;
+            average_y += *y;
+            count++;
+        }
+    }
+    return false;
+}
+
+void run_mode(FILE * file, ILidarDriver * drv, int min_angle, int max_angle, int output_data_type = OUTPUT_POLAR)
 {
     sl_result    op_result;
     int          distances[DISTANCE_COUNT] = {0};
@@ -118,6 +190,14 @@ void run_mode(FILE * file, ILidarDriver * drv)
         }
     }
 
+    printf("Min angle: %d, Max angle: %d, Output Data_Type: ", min_angle/10, max_angle/10);
+    if(output_data_type == OUTPUT_POLAR)
+        printf("Polar\n");
+    else if(output_data_type == OUTPUT_CARTESIAN)
+        printf("Cartesian\n");
+    else if(output_data_type == OUTPUT_FILTERED)
+        printf("Filtered\n");
+        
     while (!ctrl_c_pressed) 
     {
         sl_lidar_response_measurement_node_hq_t nodes[8192];
@@ -127,6 +207,16 @@ void run_mode(FILE * file, ILidarDriver * drv)
 
         if (SL_IS_OK(op_result)) 
         {
+            if(output_data_type == OUTPUT_FILTERED)
+            {
+                float average_x = 0.0f;
+                float average_y = 0.0f;
+                if(filter_algorithm(true, &average_x, &average_y))
+                {
+                    printf("X: %03.2f, Y: %08.2f\n", average_x, average_y);
+                }
+            }
+
             drv->ascendScanData(nodes, count);
             for (int pos = 0; pos < (int)count ; ++pos) 
             {
@@ -136,11 +226,26 @@ void run_mode(FILE * file, ILidarDriver * drv)
                 if (quality > 0 && dist > 0) 
                 {
                     int inter_angle = (int)round(angle * 10.0f);
-                    if (inter_angle >= 0 && inter_angle < DISTANCE_COUNT )
+                    if (inter_angle >= min_angle && inter_angle < max_angle )
                     {
                         int calib_dist = distances[inter_angle];
                         if(dist < calib_dist)
-                            printf("Angle: %03.2f Dist: %08.2f calib_dist: %d\n", angle, dist, calib_dist);
+                        {
+                            if(output_data_type == OUTPUT_CARTESIAN)
+                            {
+                                CartesianPoint point = polar_to_cartesian_scaled(inter_angle, dist);
+                                printf("X: %08.2f Y: %08.2f\n", point.x, point.y);
+                            }
+                            else if(output_data_type == OUTPUT_POLAR)
+                            {
+                                printf("Angle: %03.2f Dist: %08.2f calib_dist: %d\n", angle, dist, calib_dist);
+                            }
+                            else if(output_data_type == OUTPUT_FILTERED)
+                            {
+                                CartesianPoint point = polar_to_cartesian_scaled(inter_angle, dist);
+                                filter_algorithm(false, &point.x, &point.y);
+                            }
+                        }
                     }
                 }
             }
@@ -222,15 +327,27 @@ void calibrate_mode(FILE * file, ILidarDriver * drv)
         file = NULL;
         printf("Calibration data saved\n");
     }
-}   
+} 
+
+void print_usage()
+{
+       printf("\n\nUsage: -s <filename> to save calibration file\n");
+       printf("       -l <filename> to load calibration file [min angle, max angle]\n");
+       printf("       -x <filename> to load calibration file [min angle, max angle] output X,Y\n");
+       printf("       -f <filename> to load calibration file [min angle, max angle] output filtered data\n");
+}
 
 int main(int argc, const char * argv[]) 
 {
     const char * comm_port = NULL;
     FILE       * file = NULL;
+    const char * calibration_filename = NULL;
     sl_u32       baudrateArray[2] = {115200, 256000};
     IChannel*    _channel;
     int          save_flag = 0;
+    int          min_angle = 0;
+    int          max_angle = DISTANCE_COUNT;
+    int          output_data_type = OUTPUT_POLAR;
 
     printf("Find Object Using LIDAR\nSDK Version: %s\n", SL_LIDAR_SDK_VERSION);
     printf("Compiled: %s %s\n", __DATE__, __TIME__);
@@ -245,45 +362,69 @@ int main(int argc, const char * argv[])
 #endif	 
 
     printf("\nUsing default serial port %s\n", comm_port);
-
-    if (argc == 3) 
+    // argc 2 illegal
+    // argc 3 -> argv[1] = mode (-s or -l)
+    //        -> argv[2] = calibration filename
+    // argc 4  illegal
+    // argc 5 -> argv[1] = mode (-s or -l)
+    //        -> argv[2] = calibration filename
+    //        -> argv[3] = min angle
+    //        -> argv[4] = max angle
+    
+    switch(argc)
     {
-        if (strcmp(argv[1], "-s") == 0) 
-        {
-            // create file argv[2] to save calibration data
-            const char * calibration_filename = argv[2];
-            printf("Save calibration data to %s\n", calibration_filename);
-            // open file for writing
-            file = fopen(calibration_filename, "w");
-            if (!file) {
-                fprintf(stderr, "Error opening file for writing: %s\n", calibration_filename);
-                return -1;
-            }
-
-            save_flag = 1;
-        }
-        else if (strcmp(argv[1], "-l") == 0) 
-        {
-            // load calibration data from file argv[2]
-            const char * calibration_filename = argv[2];
-            printf("Load calibration data from %s\n", calibration_filename);
-            // open file for reading
-            file = fopen(calibration_filename, "r");
-            if (!file) {
-                fprintf(stderr, "Error opening file for reading: %s\n", calibration_filename);
-                return -1;
-            }
-        }
-        else
-        {
+        case 1:
+        case 2:
+        case 4:
+        default:
             print_usage();
+            break;
+        case 3:
+        case 5:
+            calibration_filename = argv[2];
+            if (strcmp(argv[1], "-s") == 0) 
+                save_flag = 1;
+            else if (strcmp(argv[1], "-x") == 0)
+                output_data_type = OUTPUT_CARTESIAN;
+            else if (strcmp(argv[1], "-f") == 0)
+                output_data_type = OUTPUT_FILTERED; 
+            break;
+    }
+
+    if( argc == 5) // -s filename min_angle max_angle or -l filename min_angle max_angle
+    {
+        min_angle = atoi(argv[3]);
+        max_angle = atoi(argv[4]);
+        max_angle *= 10;
+        min_angle *= 10;
+        if (min_angle < 0 || min_angle >= DISTANCE_COUNT || max_angle <= min_angle || max_angle > DISTANCE_COUNT)
+        {
+            printf("Invalid angle range [%d, %d]\n", min_angle/10, max_angle/10);
             return -1;
         }
     }
-    else
+
+    if (save_flag) 
     {
-        print_usage();
-        return -1;
+        // create file argv[2] to save calibration data
+        printf("Save calibration data to %s\n", calibration_filename);
+        // open file for writing
+        file = fopen(calibration_filename, "w");
+        if (!file) {
+            fprintf(stderr, "Error opening file for writing: %s\n", calibration_filename);
+            return -1;
+        }
+    }
+    else 
+    {
+        // load calibration data from file argv[2]
+        printf("Load calibration data from %s\n", calibration_filename);
+        // open file for reading
+        file = fopen(calibration_filename, "r");
+        if (!file) {
+            fprintf(stderr, "Error opening file for reading: %s\n", calibration_filename);
+            return -1;
+        }
     }
 
     // create the driver instance
@@ -353,7 +494,7 @@ int main(int argc, const char * argv[])
     {
         if(!save_flag) 
         {
-            run_mode(file, drv);
+            run_mode(file, drv, min_angle, max_angle, output_data_type);
         }
         else 
         {
