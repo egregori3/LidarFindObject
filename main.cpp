@@ -197,7 +197,7 @@ void run_mode(FILE * file, ILidarDriver * drv, int min_angle, int max_angle, int
         printf("Cartesian\n");
     else if(output_data_type == OUTPUT_FILTERED)
         printf("Filtered\n");
-        
+
     while (!ctrl_c_pressed) 
     {
         sl_lidar_response_measurement_node_hq_t nodes[8192];
@@ -213,7 +213,7 @@ void run_mode(FILE * file, ILidarDriver * drv, int min_angle, int max_angle, int
                 float average_y = 0.0f;
                 if(filter_algorithm(true, &average_x, &average_y))
                 {
-                    printf("X: %03.2f, Y: %08.2f\n", average_x, average_y);
+                    printf("X: %03.2f Y: %08.2f\n", average_x, average_y);
                 }
             }
 
