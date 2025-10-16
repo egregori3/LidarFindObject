@@ -30,6 +30,7 @@
 #include <string.h>
 #include <limits>
 #include <cmath>
+#include <vector>
 
 #define DISTANCE_COUNT (360*10)
 #define MAX_CALIBRATION_SCANS 100
@@ -87,6 +88,56 @@ bool checkSLAMTECLIDARHealth(ILidarDriver * drv)
         return false;
     }
 }
+
+void getLIDARMode(ILidarDriver * drv)
+{
+   // Get and display all supported scan modes
+    {
+        std::vector<sl::LidarScanMode> scanModes;
+        sl_result scan_op_result = drv->getAllSupportedScanModes(scanModes);
+        
+        if (SL_IS_OK(scan_op_result)) {
+            printf("\nSupported Scan Modes (%d total):\n", (int)scanModes.size());
+            printf("ID | Name                 | Max Dist | Ans Type | Sample Rate\n");
+            printf("---|----------------------|----------|----------|------------\n");
+            
+            for (size_t i = 0; i < scanModes.size(); ++i) {
+                const auto& mode = scanModes[i];
+                printf("%2d | %-20s | %8.1f | %8d | %8.1f Hz\n", 
+                       mode.id,
+                       mode.scan_mode,
+                       mode.max_distance,
+                       mode.ans_type,
+                       mode.us_per_sample ? (1000000.0f / mode.us_per_sample) : 0.0f);
+            }
+            printf("\n");
+        } else {
+            printf("Failed to get scan modes: %x\n", scan_op_result);
+        }
+
+         // Get current scan mode info
+        sl_u16 current_mode_id;
+        sl_result mode_result = drv->getTypicalScanMode(current_mode_id);
+        if (SL_IS_OK(mode_result)) 
+        {
+            // Find the matching scan mode from the list
+            for (const auto& mode : scanModes) {
+                if (mode.id == current_mode_id) {
+                    printf("Current scan mode: %s (ID: %d, Sample Rate: %.1f Hz)\n", 
+                           mode.scan_mode, 
+                           mode.id,
+                           mode.us_per_sample ? (1000000.0f / mode.us_per_sample) : 0.0f);
+                    break;
+                }
+            }
+        }
+        else 
+        {
+            printf("Failed to get current scan mode: %x\n", mode_result);
+        }
+    }
+}
+
 
 bool ctrl_c_pressed;
 void ctrlc(int)
@@ -476,17 +527,23 @@ int main(int argc, const char * argv[])
             , devinfo.firmware_version & 0xFF
             , (int)devinfo.hardware_version);
 
-
+ 
 
     // check health...
     if (!checkSLAMTECLIDARHealth(drv)) {
         goto on_finished;
     }
 
+    getLIDARMode(drv);
+
     signal(SIGINT, ctrlc);
     
     drv->setMotorSpeed();
+        
     // start scan...
+    // Parameters: startScan(force_scan, use_typical_scan, options, scan_mode)
+    // force_scan=0: Don't force scan if motor is not ready
+    // use_typical_scan=1: Use the device's typical scan mode (usually Standard)
     drv->startScan(0,1);
 
 
