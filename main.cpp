@@ -36,9 +36,6 @@
 
 #include "sl_lidar.h" 
 #include "sl_lidar_driver.h"
-#ifndef _countof
-#define _countof(_Array) (int)(sizeof(_Array) / sizeof(_Array[0]))
-#endif
 
 #ifdef _WIN32
 #include <Windows.h>
@@ -304,12 +301,13 @@ int main(int argc, const char * argv[])
     // use_typical_scan=1: Use the device's typical scan mode (usually Standard)
     drv->startScan(0,1);
 
-
     if (file)
     {
         if(!save_flag) 
         {
+            start_server();
             run_mode(file, drv, min_angle, max_angle, output_data_type);
+            cleanup_server();
         }
         else 
         {
@@ -324,6 +322,7 @@ int main(int argc, const char * argv[])
 
     // done!
 on_finished:
+    printf("Now exiting...\n");
     if(drv) {
         drv->stop();
 	    delay(200);

@@ -24,3 +24,12 @@
 
 void calibrate_mode(FILE * file, sl::ILidarDriver * drv);
 void run_mode(FILE * file, sl::ILidarDriver * drv, int min_angle, int max_angle, int output_data_type);
+
+// External function declarations for server API
+
+bool get_server_data(std::string& data_out);
+bool send_server_data(const std::string& data);
+bool is_server_running();
+void cleanup_server();
+int start_server();
+

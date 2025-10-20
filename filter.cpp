@@ -15,21 +15,6 @@
 #define _countof(_Array) (int)(sizeof(_Array) / sizeof(_Array[0]))
 #endif
 
-#ifdef _WIN32
-#include <Windows.h>
-#define delay(x)   ::Sleep(x)
-#else
-#include <unistd.h>
-static inline void delay(sl_word_size_t ms){
-    while (ms>=1000){
-        usleep(1000*1000);
-        ms-=1000;
-    };
-    if (ms!=0)
-        usleep(ms*1000);
-}
-#endif
-
 using namespace sl;
 
 extern bool ctrl_c_pressed;
@@ -153,6 +138,12 @@ void run_mode(FILE * file, ILidarDriver * drv, int min_angle, int max_angle, int
                 float average_y = 0.0f;
                 if(filter_algorithm(true, &average_x, &average_y))
                 {
+                    if(is_server_running())
+                    {
+                        char buffer[100];
+                        snprintf(buffer, sizeof(buffer), "X: %03.2f Y: %08.2f\n", average_x, average_y);
+                        send_server_data(std::string(buffer));
+                    }
                     printf("X: %03.2f Y: %08.2f\n", average_x, average_y);
                 }
             }
