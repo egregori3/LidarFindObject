@@ -20,10 +20,11 @@
 #include <cstring>
 
 struct SharedData {
-    std::queue<std::string> recv_queue;
     std::queue<std::string> send_queue;
     std::mutex mtx;
     std::condition_variable cv;
+    std::condition_variable send_complete_cv;  // New: signals when send is complete
+    bool send_in_progress;                     // New: tracks if data is being sent
     int sock;
     sockaddr_in last_client;
     bool shutdown_requested;
@@ -34,25 +35,9 @@ struct SharedData {
 // Global pointer to shared data for cleanup access
 static SharedData* g_server_data = nullptr;
 
-// Non-blocking function to get data from receive queue
-// Returns true if data was retrieved, false if queue is empty
-bool get_server_data(std::string& data_out) {
-    if (!g_server_data) {
-        return false;  // Server not initialized
-    }
-    
-    std::lock_guard<std::mutex> lock(g_server_data->mtx);
-    if (g_server_data->recv_queue.empty()) {
-        return false;  // No data available
-    }
-    
-    data_out = g_server_data->recv_queue.front();
-    g_server_data->recv_queue.pop();
-    return true;  // Data retrieved successfully
-}
 
 // Non-blocking function to send data to client
-// Returns true if data was queued for sending, false if no client connected
+// Returns true if data was queued for sending, false if send in progress, no client, or server shutting down
 bool send_server_data(const std::string& data) {
     if (!g_server_data) {
         return false;  // Server not initialized
@@ -63,9 +48,27 @@ bool send_server_data(const std::string& data) {
         return false;  // No client connected
     }
     
+    if (g_server_data->shutdown_requested) {
+        return false;  // Server is shutting down
+    }
+    
+    // If a send is already in progress, discard new data (non-blocking behavior)
+    if (g_server_data->send_in_progress) {
+        return false;  // Drop the data, don't wait
+    }
+    
+    // Clear any stale messages to keep only the latest data
+    std::queue<std::string> empty;
+    std::swap(g_server_data->send_queue, empty);
+    
+    // Mark send operation as in progress
+    g_server_data->send_in_progress = true;
+    
+    // Add the new message (queue now has exactly one entry)
     g_server_data->send_queue.push(data);
     g_server_data->cv.notify_one();
-    return true;  // Data queued for sending
+    
+    return true;  // Data queued successfully
 }
 
 // Function to check if server is running
@@ -89,9 +92,11 @@ static void rx_thread(SharedData& data) {
         if (len > 0) {
             std::lock_guard<std::mutex> lock(data.mtx);
             if (!data.shutdown_requested) {
-                data.recv_queue.push(std::string(buffer, len));
+                // clear the send_queue to avoid stale messages
+                std::queue<std::string> empty;
+                std::swap(data.send_queue, empty);
                 data.last_client = client_addr;
-                data.cv.notify_one();
+                // No notify needed - rx_thread doesn't add to send_queue
             }
         }
         // len <= 0 could be timeout or error - continue if not shutting down
@@ -101,26 +106,33 @@ static void rx_thread(SharedData& data) {
 static void tx_thread(SharedData& data) {
     while (!data.shutdown_requested) {
         std::unique_lock<std::mutex> lock(data.mtx);
-        // Wait with timeout to allow periodic shutdown checks
-        data.cv.wait_for(lock, std::chrono::seconds(1), [&data]{ 
+        
+        // Wait until send_queue is not empty (or shutdown requested)
+        data.cv.wait(lock, [&data]{ 
             return !data.send_queue.empty() || data.shutdown_requested; 
         });
         
         if (data.shutdown_requested) break;
         
+        // Process the message (should be only one due to single-entry queue)
         if (!data.send_queue.empty()) {
             std::string msg = data.send_queue.front();
             data.send_queue.pop();
             lock.unlock();
 
+            // Send the message
             if (data.last_client.sin_family == AF_INET) {
                 sendto(data.sock, msg.c_str(), msg.size(), 0, (sockaddr*)&data.last_client, sizeof(data.last_client));
             }
+            
+            lock.lock();
+            
+            // Mark send operation as complete and notify waiting sender
+            data.send_in_progress = false;
+            data.send_complete_cv.notify_one();
         }
     }
 }
-
-
 
 // Function to send cleanup signal to server
 void cleanup_server() 
@@ -134,6 +146,7 @@ void cleanup_server()
             g_server_data->shutdown_requested = true;
         }
         g_server_data->cv.notify_all();
+        g_server_data->send_complete_cv.notify_all();  // Wake up any waiting senders
         
         // Wait for threads to finish (with timeout)
         if (g_server_data->rx_thread && g_server_data->rx_thread->joinable()) {
@@ -173,6 +186,7 @@ int start_server()
     
     // Initialize shutdown flag
     data.shutdown_requested = false;
+    data.send_in_progress = false;  // Initialize send tracking
     data.sock = -1;  // Initialize socket to invalid value
     data.rx_thread = nullptr;  // Initialize thread pointers
     data.tx_thread = nullptr;

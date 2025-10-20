@@ -21,6 +21,8 @@ extern bool ctrl_c_pressed;
 
 // Structure to hold Cartesian coordinates
 struct CartesianPoint {
+    float angle;
+    float distance;
     float x;
     float y;
 };
@@ -32,6 +34,8 @@ struct CartesianPoint {
 CartesianPoint polar_to_cartesian(float angle_degrees, float distance_mm)
 {
     CartesianPoint point;
+    point.angle = angle_degrees;
+    point.distance = distance_mm;
     
     // Convert degrees to radians
     float angle_radians = angle_degrees * M_PI / 180.0f;
@@ -55,45 +59,87 @@ CartesianPoint polar_to_cartesian_scaled(int angle_scaled, float distance_mm)
 // Filter output algorithm
 // returns true if x and y are output
 // new scan indicates start of new scan
-bool filter_algorithm(bool new_scan, float *x, float *y)
+std::string filter_algorithm(bool new_scan, float angle, float dist )
 {
-    static float average_x = 0.0f;
-    static float average_y = 0.0f;
-    static int count = 0;
+    static std::vector<CartesianPoint> points;
+    std::string result = "No Object Detected\n";
 
     // Pablos's average X and Y algorithm
+    CartesianPoint point = polar_to_cartesian_scaled(angle, dist);
     if(new_scan) // Start of scan
     {
-        if(count > 0)
+        if(points.size() > 0)
         {
-            *x = average_x / count;
-            *y = average_y / count;
-            average_x = 0.0f;
-            average_y = 0.0f;
+            char buffer[100];
+            float sum_x = 0.0f;
+            float sum_y = 0.0f;
+            int start, stop, count;
+
+            // Find min distance points around center
+            float min_distance = std::numeric_limits<float>::max();
+
+            for (const auto& p : points) 
+            {
+                if (p.distance < min_distance) 
+                {
+                    min_distance = p.distance;
+                }
+            }
+
+            count = points.size();
+            if(count > 20)
+            {
+                start = count / 2 - 10; // to avoid division by zero
+                stop = count / 2 + 10;
+            }
+            else
+            {
+                start = 0;
+                stop = count;
+            }
             count = 0;
-            return true;
+            result = "";
+            for (const auto& p : points) 
+            {
+                sum_x += p.x;
+                sum_y += p.y;
+                if( count >= start && count < stop )
+                {
+                    // Add to result string as well
+                    if(p.distance == min_distance)
+                    {
+                        snprintf(buffer, sizeof(buffer), "*angle:%.2f, dist:%.2f, X: %.2f, Y: %.2f\n", p.angle, p.distance, p.x, p.y);
+                    }
+                    else
+                    {
+                        snprintf(buffer, sizeof(buffer), "angle:%.2f, dist:%.2f, X: %.2f, Y: %.2f\n", p.angle, p.distance, p.x, p.y);
+                    }
+                    result += std::string(buffer);
+                }
+                count++;
+            }
+            float x = sum_x / points.size();
+            float y = sum_y / points.size();
+            snprintf(buffer, sizeof(buffer), "AVGX: %.2f, AVGY: %.2f\n", x, y);
+            result += std::string(buffer);
+            // Reset for next scan
+            points.clear();
         }
         else
         {
             // No valid points collected in the last scan
-            *x = 0.0f;
-            *y = 0.0f;
-            return false;
+
         }
     }
     else // During scan, accumulate points
     {
-        if(x && y)
-        {
-            average_x += *x;
-            average_y += *y;
-            count++;
-        }
+        points.push_back(point);
     }
-    return false;
+    // return empty string object if no output
+    return result;
 }
 
-void run_mode(FILE * file, ILidarDriver * drv, int min_angle, int max_angle, int output_data_type = OUTPUT_POLAR)
+void run_mode(FILE * file, ILidarDriver * drv, int min_angle, int max_angle)
 {
     sl_result    op_result;
     int          distances[DISTANCE_COUNT] = {0};
@@ -115,13 +161,7 @@ void run_mode(FILE * file, ILidarDriver * drv, int min_angle, int max_angle, int
         }
     }
 
-    printf("Min angle: %d, Max angle: %d, Output Data_Type: ", min_angle/10, max_angle/10);
-    if(output_data_type == OUTPUT_POLAR)
-        printf("Polar\n");
-    else if(output_data_type == OUTPUT_CARTESIAN)
-        printf("Cartesian\n");
-    else if(output_data_type == OUTPUT_FILTERED)
-        printf("Filtered\n");
+    printf("Min angle: %d, Max angle: %d ", min_angle/10, max_angle/10);
 
     while (!ctrl_c_pressed) 
     {
@@ -132,20 +172,11 @@ void run_mode(FILE * file, ILidarDriver * drv, int min_angle, int max_angle, int
 
         if (SL_IS_OK(op_result)) 
         {
-            if(output_data_type == OUTPUT_FILTERED)
+            std::string result = filter_algorithm(true, 0, 0); // Indicate new scan
+            if(is_server_running() && !result.empty())
             {
-                float average_x = 0.0f;
-                float average_y = 0.0f;
-                if(filter_algorithm(true, &average_x, &average_y))
-                {
-                    if(is_server_running())
-                    {
-                        char buffer[100];
-                        snprintf(buffer, sizeof(buffer), "X: %03.2f Y: %08.2f\n", average_x, average_y);
-                        send_server_data(std::string(buffer));
-                    }
-                    printf("X: %03.2f Y: %08.2f\n", average_x, average_y);
-                }
+                printf("\n%s\n", result.c_str());
+                send_server_data(result);
             }
 
             drv->ascendScanData(nodes, count);
@@ -156,15 +187,17 @@ void run_mode(FILE * file, ILidarDriver * drv, int min_angle, int max_angle, int
                 int quality = nodes[pos].quality >> SL_LIDAR_RESP_MEASUREMENT_QUALITY_SHIFT;
                 if (quality > 0 && dist > 0) 
                 {
-                    int inter_angle = (int)round(angle * 10.0f);
-                    if (inter_angle >= min_angle && inter_angle < max_angle )
+                    int integer_angle = (int)round(angle * 10.0f);
+                    if (integer_angle >= min_angle && integer_angle < max_angle )
                     {
-                        int calib_dist = distances[inter_angle];
+                        int calib_dist = distances[integer_angle];
                         if(dist < calib_dist)
                         {
+                            filter_algorithm(false, angle, dist);
+# if 0
                             if(output_data_type == OUTPUT_CARTESIAN)
                             {
-                                CartesianPoint point = polar_to_cartesian_scaled(inter_angle, dist);
+                                CartesianPoint point = polar_to_cartesian_scaled(integer_angle, dist);
                                 printf("X: %08.2f Y: %08.2f\n", point.x, point.y);
                             }
                             else if(output_data_type == OUTPUT_POLAR)
@@ -173,9 +206,10 @@ void run_mode(FILE * file, ILidarDriver * drv, int min_angle, int max_angle, int
                             }
                             else if(output_data_type == OUTPUT_FILTERED)
                             {
-                                CartesianPoint point = polar_to_cartesian_scaled(inter_angle, dist);
+                                CartesianPoint point = polar_to_cartesian_scaled(integer_angle, dist);
                                 filter_algorithm(false, &point.x, &point.y);
                             }
+#endif
                         }
                     }
                 }

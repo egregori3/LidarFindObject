@@ -23,7 +23,7 @@
 
 
 void calibrate_mode(FILE * file, sl::ILidarDriver * drv);
-void run_mode(FILE * file, sl::ILidarDriver * drv, int min_angle, int max_angle, int output_data_type);
+void run_mode(FILE * file, sl::ILidarDriver * drv, int min_angle, int max_angle);
 
 // External function declarations for server API
 

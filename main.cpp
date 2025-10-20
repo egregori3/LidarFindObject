@@ -148,12 +148,11 @@ int main(int argc, const char * argv[])
     const char * comm_port = NULL;
     FILE       * file = NULL;
     const char * calibration_filename = NULL;
-    sl_u32       baudrateArray[2] = {115200, 256000};
+    sl_u32       baudrateArray[4] = {115200, 256000, 1000000, 2000000};
     IChannel*    _channel;
     int          save_flag = 0;
     int          min_angle = 0;
     int          max_angle = DISTANCE_COUNT;
-    int          output_data_type = OUTPUT_POLAR;
 
     printf("Find Object Using LIDAR\nSDK Version: %s\n", SL_LIDAR_SDK_VERSION);
     printf("Compiled: %s %s\n", __DATE__, __TIME__);
@@ -190,10 +189,6 @@ int main(int argc, const char * argv[])
             calibration_filename = argv[2];
             if (strcmp(argv[1], "-s") == 0) 
                 save_flag = 1;
-            else if (strcmp(argv[1], "-x") == 0)
-                output_data_type = OUTPUT_CARTESIAN;
-            else if (strcmp(argv[1], "-f") == 0)
-                output_data_type = OUTPUT_FILTERED; 
             break;
     }
 
@@ -203,7 +198,7 @@ int main(int argc, const char * argv[])
         max_angle = atoi(argv[4]);
         max_angle *= 10;
         min_angle *= 10;
-        if (min_angle < 0 || min_angle >= DISTANCE_COUNT || max_angle <= min_angle || max_angle > DISTANCE_COUNT)
+        if (min_angle < 0 || min_angle >= DISTANCE_COUNT || max_angle < 0 || max_angle >= DISTANCE_COUNT)
         {
             printf("Invalid angle range [%d, %d]\n", min_angle/10, max_angle/10);
             return -1;
@@ -306,7 +301,7 @@ int main(int argc, const char * argv[])
         if(!save_flag) 
         {
             start_server();
-            run_mode(file, drv, min_angle, max_angle, output_data_type);
+            run_mode(file, drv, min_angle, max_angle);
             cleanup_server();
         }
         else 
