@@ -242,6 +242,7 @@ int main(int argc, const char * argv[])
     size_t baudRateArraySize = (sizeof(baudrateArray))/ (sizeof(baudrateArray[0]));
 	for(size_t i = 0; i < baudRateArraySize; ++i)
 	{
+        printf("Trying to connect SLAMTEC LIDAR on %s with baudrate %d\n", comm_port, baudrateArray[i]);
 		_channel = (*createSerialPortChannel(comm_port, baudrateArray[i]));
         if (SL_IS_OK((drv)->connect(_channel))) 
         {
@@ -253,7 +254,7 @@ int main(int argc, const char * argv[])
             }
             else
             {
-                break;
+                drv->disconnect();              
             }
         }
 	}
