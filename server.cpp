@@ -98,6 +98,8 @@ static void server_thread(void)
         {
             if (!shutdown_requested) 
             {
+                data_to_send.clear();  // Clear previous data before sending new data
+
                 // Send the message
                 if (client_addr.sin_family == AF_INET) 
                 {
