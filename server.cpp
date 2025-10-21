@@ -98,7 +98,10 @@ static void server_thread(void)
         {
             if (!shutdown_requested) 
             {
+                std::unique_lock<std::mutex> lock(mtx);
                 data_to_send.clear();  // Clear previous data before sending new data
+                // unlock mutex while processing to allow send_server_data to queue new data
+                lock.unlock();
 
                 // Send the message
                 if (client_addr.sin_family == AF_INET) 
