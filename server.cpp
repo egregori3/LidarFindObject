@@ -81,42 +81,44 @@ static void server_thread(void)
         return;
     }
     
+    // Set socket timeout to allow periodic shutdown checks
+    struct timeval timeout;
+    timeout.tv_sec = SOCKET_TIMEOUT_SEC;
+    timeout.tv_usec = 0;
+    if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
+        perror("setsockopt failed");
+    }
+    
     printf("Server started on port %d\n", SERVER_PORT);
 
     while (!shutdown_requested) 
     {
-        // Set socket timeout to allow periodic shutdown checks
-        struct timeval timeout;
-        timeout.tv_sec = SOCKET_TIMEOUT_SEC;  // Use constant
-        timeout.tv_usec = 0;
-        if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
-            perror("setsockopt failed");
-        }
         
         ssize_t len = recvfrom(sock, buffer, sizeof(buffer), 0, (sockaddr*)&client_addr, &client_len);
         if (len > 0) 
         {
             if (!shutdown_requested) 
             {
-                std::unique_lock<std::mutex> lock(mtx);
-                data_to_send.clear();  // Clear previous data before sending new data
-                // unlock mutex while processing to allow send_server_data to queue new data
-                lock.unlock();
-
-                // Send the message
+                // Client sent a message - this triggers us to send fresh data
                 if (client_addr.sin_family == AF_INET) 
                 {
-                    // wait for signal from send_server_data
                     std::unique_lock<std::mutex> lock(mtx);
+                    
+                    // Clear any stale data - we want fresh data only
+                    data_to_send.clear();
+                    
+                    // Wait for fresh data from send_server_data
                     while (data_to_send.empty() && !shutdown_requested) {
                         cv.wait(lock);
                     }
+                    
+                    // Send the fresh data
                     if (!shutdown_requested && !data_to_send.empty()) {
                         ssize_t sent = sendto(sock, data_to_send.c_str(), data_to_send.size(), 0, (sockaddr*)&client_addr, sizeof(client_addr));
                         if (sent < 0) {
                             perror("sendto failed");
                         } else {
-                            printf("Sent %zd bytes to client\n", sent);
+                            printf("Sent %zd bytes of fresh data to client\n", sent);
                         }
                         data_to_send.clear();  // Clear after sending to prevent re-sending
                     }
