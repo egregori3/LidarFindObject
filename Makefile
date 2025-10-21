@@ -27,6 +27,7 @@ CXXSRC += main.cpp
 CXXSRC += calibration.cpp
 CXXSRC += filter.cpp
 CXXSRC += server.cpp
+CXXSRC += run.cpp
 C_INCLUDES += -I$(CURDIR)/../../sdk/include -I$(CURDIR)/../../sdk/src
 
 EXTRA_OBJ := 

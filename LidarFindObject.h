@@ -24,6 +24,7 @@
 
 void calibrate_mode(FILE * file, sl::ILidarDriver * drv);
 void run_mode(FILE * file, sl::ILidarDriver * drv, int min_angle, int max_angle);
+std::string filter_algorithm(bool new_scan, float angle, float dist );
 
 // External function declarations for server API
 
