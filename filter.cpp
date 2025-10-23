@@ -48,13 +48,6 @@ static CartesianPoint polar_to_cartesian(float angle_degrees, float distance_mm)
     return point;
 }
 
-// Overloaded version that takes angle in degrees*10 format (as used in your arrays)
-static CartesianPoint polar_to_cartesian_scaled(int angle_scaled, float distance_mm)
-{
-    // Convert scaled angle (degrees * 10) back to degrees
-    float angle_degrees = angle_scaled / 10.0f;
-    return polar_to_cartesian(angle_degrees, distance_mm);
-}
 
 // Filter output algorithm
 // returns true if x and y are output
@@ -65,7 +58,7 @@ std::string filter_algorithm(bool new_scan, float angle, float dist )
     std::string result = "No Object Detected\n";
 
     // Pablos's average X and Y algorithm
-    CartesianPoint point = polar_to_cartesian_scaled(angle, dist);
+    CartesianPoint point = polar_to_cartesian(angle, dist);
     if(new_scan) // Start of scan
     {
         if(points.size() > 0)
