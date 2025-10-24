@@ -1,6 +1,9 @@
 git clone git@github.com:Slamtec/rplidar_sdk.git
+
 cd ~/rplidar_sdk/app/ultra_simple
+
 rm *
+
 git clone git@github.com:egregori3/LidarFindObject.git .
 
 (base) eric@raspberrypi:~/rplidar_sdk/app/ultra_simple $ ls
