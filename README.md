@@ -6,8 +6,10 @@ rm *
 
 git clone git@github.com:egregori3/LidarFindObject.git .
 
+```
 (base) eric@raspberrypi:~/rplidar_sdk/app/ultra_simple $ ls
 calibration.cpp  filter.cpp  LidarFindObject.h  main.cpp  Makefile  run.cpp  server.cpp
+```
 
 ~/rplidar_sdk $ make
 
@@ -41,6 +43,7 @@ Usage: -s <filename> to save calibration file
        -l <filename> to load calibration file [min angle, max angle]
        -x <filename> to load calibration file [min angle, max angle] output X,Y
        -f <filename> to load calibration file [min angle, max angle] output filtered data
-```
+
 Load calibration data from (null)
 Error opening file for reading: (null)
+```
